@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#080b12">
+  <title>Silverstone Racing Lab</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#simulator">Skip to simulator</a>
+
+  <main class="shell" id="simulator">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span> Apex Dynamics</div>
+      <span class="model-chip">Calibrated research model</span>
+    </header>
+
+    <form class="simulation-builder" id="simulationForm" novalidate>
+      <section class="hero" aria-labelledby="pageTitle">
+        <div>
+          <p class="eyebrow">Racing strategy simulator</p>
+          <h1 id="pageTitle">Silverstone<br><span>Racing Lab.</span></h1>
+          <p class="hero-copy">Build a tyre and weather strategy, run the race, then explore every line and telemetry point on an interactive circuit map.</p>
+        </div>
+
+        <div class="run-panel">
+          <label class="run-label" for="laps">Race distance</label>
+          <div class="run-controls">
+            <div class="number-wrap">
+              <input id="laps" name="laps" type="number" value="10" min="1" max="25" step="1" inputmode="numeric" required aria-describedby="runHint">
+            </div>
+            <button class="run-button" id="runButton" type="submit">
+              <span class="spinner" aria-hidden="true"></span>
+              <span id="runButtonText">Run strategy</span>
+              <span class="button-arrow" aria-hidden="true">&rarr;</span>
+            </button>
+          </div>
+          <p class="run-hint" id="runHint">Choose 1&ndash;25 laps. Tyre and weather changes are applied from their selected lap.</p>
+        </div>
+      </section>
+
+      <section class="panel strategy-editor" aria-labelledby="strategyEditorTitle">
+        <header class="panel-header strategy-header">
+          <div>
+            <p class="panel-kicker">Race setup</p>
+            <h2 class="panel-title" id="strategyEditorTitle">Strategy and evolving weather</h2>
+            <p class="panel-description">Schedule tyre stints and weather phases. A change from lap 6 means the new setting applies at the start of lap 6.</p>
+          </div>
+          <div class="strategy-header-meta">
+            <span class="strategy-status" id="strategyStatus" aria-live="polite">10-lap plan</span>
+            <div class="preset-actions" role="group" aria-label="Quick strategy presets">
+              <button type="button" id="dryPreset">Dry one-stop</button>
+              <button type="button" id="rainPreset">Rain arriving</button>
+            </div>
+          </div>
+        </header>
+
+        <div class="strategy-columns">
+          <fieldset class="strategy-fieldset">
+            <legend>Tyre stints</legend>
+            <p class="fieldset-help">Select the starting compound, then add pit stops for later stints.</p>
+            <div class="fixed-strategy-row">
+              <span class="lap-chip">Lap 1</span>
+              <label class="field-group grow" for="initialTyre">
+                <span>Starting tyre</span>
+                <select id="initialTyre" name="initialTyre">
+                  <option value="soft">Soft (C3)</option>
+                  <option value="medium" selected>Medium (C2)</option>
+                  <option value="hard">Hard (C1)</option>
+                  <option value="intermediate">Intermediate</option>
+                  <option value="wet">Full Wet</option>
+                </select>
+              </label>
+            </div>
+            <div class="dynamic-rows" id="pitStopRows" aria-live="polite"></div>
+            <button class="add-row-button" id="addPitStop" type="button"><span aria-hidden="true">+</span> Add pit stop</button>
+          </fieldset>
+
+          <fieldset class="strategy-fieldset">
+            <legend>Weather timeline</legend>
+            <p class="fieldset-help">Set track conditions, temperature, and rain intensity for each phase.</p>
+            <div class="dynamic-rows weather-rows" id="weatherRows" aria-live="polite"></div>
+            <button class="add-row-button" id="addWeatherChange" type="button"><span aria-hidden="true">+</span> Add weather change</button>
+          </fieldset>
+        </div>
+
+        <div class="timeline-section">
+          <div class="timeline-heading">
+            <strong>Race plan preview</strong>
+            <span>Tyre colour with weather marker</span>
+          </div>
+          <div class="strategy-timeline" id="strategyTimeline" aria-label="Lap-by-lap strategy preview"></div>
+          <div class="timeline-key" aria-hidden="true">
+            <span><i class="key-dot tyre-soft"></i>Soft</span>
+            <span><i class="key-dot tyre-medium"></i>Medium</span>
+            <span><i class="key-dot tyre-hard"></i>Hard</span>
+            <span><i class="key-dot tyre-intermediate"></i>Intermediate</span>
+            <span><i class="key-dot tyre-wet"></i>Wet</span>
+          </div>
+        </div>
+      </section>
+    </form>
+
+    <div class="status-message" id="statusMessage" role="alert"></div>
+
+    <section class="dashboard" aria-label="Simulation dashboard">
+      <article class="panel track-panel" id="trackPanel">
+        <header class="panel-header track-header">
+          <div>
+            <p class="panel-kicker">Interactive circuit explorer</p>
+            <h2 class="panel-title" id="trackTitle">Silverstone Circuit</h2>
+          </div>
+          <div class="track-header-actions">
+            <span class="live-badge" id="liveBadge"><span class="live-dot" aria-hidden="true"></span><span id="liveText">Replay</span></span>
+            <button class="replay-button" id="replayButton" type="button" aria-label="Replay simulated laps"><span aria-hidden="true">&#8635;</span> Replay</button>
+          </div>
+        </header>
+
+        <div class="track-stage" id="trackStage">
+          <canvas id="trackCanvas" role="img" tabindex="0" aria-label="Silverstone circuit map. Run the simulation to display the optimized and driven racing lines."></canvas>
+
+          <div class="empty-state" id="emptyState">
+            <span class="empty-icon" aria-hidden="true"></span>
+            <strong>Ready on the grid</strong>
+            <span>Run the strategy to reveal the circuit and replay.</span>
+          </div>
+
+          <div class="map-toolbar" role="group" aria-label="Map navigation">
+            <button type="button" id="zoomInButton" aria-label="Zoom in" title="Zoom in">+</button>
+            <button type="button" id="zoomOutButton" aria-label="Zoom out" title="Zoom out">&minus;</button>
+            <button class="text-control" type="button" id="resetViewButton" title="Reset map view">Reset</button>
+            <span class="zoom-level" id="zoomLevel" aria-live="polite">100%</span>
+            <button class="text-control fullscreen-control" type="button" id="fullscreenButton" aria-label="Open circuit map full screen" title="Full screen">Full screen</button>
+          </div>
+
+          <fieldset class="layer-controls">
+            <legend>Map layers</legend>
+            <label><input type="checkbox" id="showTrack" checked> Track limits</label>
+            <label><input type="checkbox" id="showOptimized" checked> Optimized line</label>
+            <label><input type="checkbox" id="showDriven" checked> Driven path</label>
+            <label><input type="checkbox" id="showHeatmap"> Speed heatmap</label>
+          </fieldset>
+
+          <div class="map-tooltip" id="mapTooltip" role="status" hidden>
+            <div class="tooltip-heading"><strong id="tooltipLap">Lap &mdash;</strong><span id="tooltipTime">&mdash;</span></div>
+            <dl>
+              <div><dt>Speed</dt><dd id="tooltipSpeed">&mdash;</dd></div>
+              <div><dt>Clearance</dt><dd id="tooltipClearance">&mdash;</dd></div>
+              <div><dt>Tyre</dt><dd id="tooltipTyre">&mdash;</dd></div>
+              <div><dt>Weather</dt><dd id="tooltipWeather">&mdash;</dd></div>
+            </dl>
+            <span class="tooltip-hint" id="tooltipHint">Click to pin</span>
+          </div>
+
+          <div class="map-overlay" id="mapOverlay">
+            <div class="telemetry-readout" aria-live="polite">
+              <span class="readout-label">Replay position</span>
+              <span class="readout-value" id="replayPosition">Lap &mdash; &middot; &mdash;:&mdash;.&mdash;&mdash;&mdash;</span>
+            </div>
+            <p class="map-help">Scroll or pinch to zoom &middot; drag to pan &middot; hover for telemetry</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="overview-grid" aria-label="Race overview">
+      <aside class="panel summary-panel" aria-labelledby="summaryTitle">
+        <header class="panel-header">
+          <div>
+            <p class="panel-kicker">Run summary</p>
+            <h2 class="panel-title" id="summaryTitle">Awaiting simulation</h2>
+          </div>
+        </header>
+        <div class="summary-hero">
+          <p class="summary-big"><span id="completedLaps">&mdash;</span> <small id="requestedLaps">of 10 laps</small></p>
+          <p class="summary-caption" id="summaryCaption">Results will appear when the model completes.</p>
+          <span class="termination" id="terminationBadge"><span class="termination-dot" aria-hidden="true"></span><span id="terminationText">Ready</span></span>
+        </div>
+        <div class="metrics-grid">
+          <div class="metric"><span class="metric-label">Total time</span><span class="metric-value" id="totalTime">&mdash;</span></div>
+          <div class="metric"><span class="metric-label">Fastest lap</span><span class="metric-value" id="fastestLap">&mdash;</span></div>
+          <div class="metric"><span class="metric-label">Average lap</span><span class="metric-value" id="averageLap">&mdash;</span></div>
+          <div class="metric"><span class="metric-label">Maximum speed</span><span class="metric-value" id="maxSpeed">&mdash;</span></div>
+          <div class="metric"><span class="metric-label">Mean speed</span><span class="metric-value" id="meanSpeed">&mdash;</span></div>
+          <div class="metric"><span class="metric-label">Min. edge clearance</span><span class="metric-value" id="clearance">&mdash;</span></div>
+        </div>
+        <div class="incident-strip">
+          <div class="incident-copy"><span>Track limits</span><strong id="incidentLabel">Off-track events</strong></div>
+          <span class="incident-count" id="incidentCount">&mdash;</span>
+        </div>
+      </aside>
+
+      <article class="panel executed-plan" aria-labelledby="executedPlanTitle">
+        <header class="panel-header">
+          <div>
+            <p class="panel-kicker">Executed plan</p>
+            <h2 class="panel-title" id="executedPlanTitle">Tyres, stops, and weather</h2>
+          </div>
+          <span class="pit-count" id="pitCount">0 stops</span>
+        </header>
+        <div class="executed-plan-body" id="executedPlanBody">
+          <p class="empty-plan">Your completed race strategy will appear here.</p>
+        </div>
+      </article>
+    </section>
+
+    <section class="results-section" id="lapResults" aria-label="Lap analysis">
+      <article class="panel">
+        <header class="panel-header">
+          <div>
+            <p class="panel-kicker">Consistency</p>
+            <h2 class="panel-title">Lap-time evolution</h2>
+          </div>
+        </header>
+        <div class="chart-wrap">
+          <canvas id="lapChart" role="img" aria-label="Bar chart of lap times"></canvas>
+        </div>
+      </article>
+
+      <article class="panel">
+        <header class="panel-header">
+          <div>
+            <p class="panel-kicker">Timing sheet</p>
+            <h2 class="panel-title">Lap classification</h2>
+          </div>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">Lap</th><th scope="col">Time</th><th scope="col">Delta</th></tr></thead>
+            <tbody id="lapTableBody"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <aside class="disclaimer" aria-label="Research model disclaimer">
+      <span class="disclaimer-icon" aria-hidden="true">i</span>
+      <div><strong>Calibrated research model, not official Formula 1 telemetry.</strong> Public tyre guidance is combined with documented estimates for grip, warm-up, degradation, weather crossover, and pit loss. Results are comparative and must not be used for real driving or safety decisions.</div>
+    </aside>
+
+    <footer class="footer"><span>Silverstone &middot; Great Britain</span><span>Local browser visualization</span></footer>
+  </main>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

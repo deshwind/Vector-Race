@@ -1,0 +1,14 @@
+# Circuit-specific numerical settings for the bundled Silverstone GP layout.
+# Vehicle and tyre values continue to use the approximate research defaults.
+optimizer:
+  points: 600
+  safety_margin_m: 0.59
+  smoothness_weight: 0.08
+  offset_regularization: 0.000001
+  max_iterations: 300
+
+simulation:
+  lookahead_base_m: 3.0
+  lookahead_speed_gain_s: 0.08
+  speed_kp: 6.3
+  steering_kp: 1.58
