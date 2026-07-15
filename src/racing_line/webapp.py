@@ -1,7 +1,8 @@
-"""Dependency-free local web dashboard for Silverstone simulations."""
+"""Dependency-free local dashboard for Formula 1 circuit simulations."""
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import webbrowser
@@ -9,14 +10,24 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from math import ceil, floor
+from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
-from .config import AppConfig, make_silverstone_config
+from .circuits import (
+    DEFAULT_CIRCUIT_ID,
+    F1_CIRCUIT_SEASON,
+    CircuitInfo,
+    circuit_info,
+    f1_circuit_catalogue,
+    make_f1_circuit,
+)
+from .config import AppConfig, make_f1_catalog_config
 from .pipeline import BuildResult, build_trajectory
 from .simulation import LapSimulator, SimulationResult
 from .strategy import RacePlan, parse_race_plan, strategy_catalog
-from .track import make_silverstone_track
+from .tyre_analysis import analyse_tyre_performance
+from .web_history import DEFAULT_HISTORY_LIMIT, SimulationHistoryStore
 
 
 DEFAULT_WEB_PORT = 8765
@@ -24,6 +35,7 @@ DEFAULT_WEB_LAPS = 10
 MAX_WEB_LAPS = 25
 MAX_REQUEST_BYTES = 16_384
 MAX_TELEMETRY_POINTS = 6000
+DEFAULT_HISTORY_PATH = Path("outputs") / "simulation_history.json"
 _STATIC_TYPES = {
     "index.html": "text/html; charset=utf-8",
     "app.js": "text/javascript; charset=utf-8",
@@ -142,6 +154,7 @@ def simulation_payload(
             "width_right_m": _float_list(track.width_right_m),
         },
         "trajectory": {
+            "s_m": _float_list(trajectory.s_m),
             "x_m": _float_list(trajectory.x_m),
             "y_m": _float_list(trajectory.y_m),
             "speed_kph": _float_list(trajectory.speed_mps * 3.6),
@@ -150,7 +163,18 @@ def simulation_payload(
             "x_m": [float(row["x_m"]) for row in rows],
             "y_m": [float(row["y_m"]) for row in rows],
             "time_s": [float(row["time_s"]) for row in rows],
+            "progress_laps": [float(row["progress_laps"]) for row in rows],
             "speed_kph": [float(row["speed_mps"]) * 3.6 for row in rows],
+            "target_speed_kph": [
+                float(
+                    row.get(
+                        "target_speed_mps",
+                        row.get("reference_speed_mps", row["speed_mps"]),
+                    )
+                )
+                * 3.6
+                for row in rows
+            ],
             "lap_number": telemetry_laps,
             "clearance_m": [
                 float(row.get("vehicle_edge_clearance_m", 0.0)) for row in rows
@@ -161,6 +185,7 @@ def simulation_payload(
             "weather": [str(row.get("weather", "")) for row in rows],
             "track_temp_c": [float(row.get("track_temp_c", 0.0)) for row in rows],
             "rain_intensity": [float(row.get("rain_intensity", 0.0)) for row in rows],
+            "track_wetness": [float(row.get("track_wetness", 0.0)) for row in rows],
             "pit_stop": [bool(row.get("pit_stop", False)) for row in rows],
         },
         "summary": {
@@ -184,53 +209,140 @@ def simulation_payload(
     }
     if strategy is not None:
         payload["strategy"] = strategy
+        payload["tyre_analysis"] = analyse_tyre_performance(
+            payload,
+            circuit_length_m=getattr(trajectory, "length_m", None),
+        )
     return payload
 
 
-class SilverstoneWebService:
-    """Cache the optimized line and serialize deterministic browser runs."""
+class F1WebService:
+    """Build circuits lazily, cache numerical runs, and persist run history."""
 
     def __init__(
         self,
         config: AppConfig | None = None,
         *,
         maximum_telemetry_points: int = MAX_TELEMETRY_POINTS,
+        default_circuit_id: str = DEFAULT_CIRCUIT_ID,
+        history_path: str | Path = DEFAULT_HISTORY_PATH,
+        history_limit: int = DEFAULT_HISTORY_LIMIT,
     ) -> None:
-        self.config = config or make_silverstone_config()
+        self.config = config or make_f1_catalog_config()
         self.maximum_telemetry_points = maximum_telemetry_points
-        self.build = build_trajectory(make_silverstone_track(), self.config)
-        if not self.build.success:
-            raise RuntimeError(
-                "Silverstone trajectory generation did not converge; "
-                "inspect the optimizer configuration"
-            )
+        self.default_circuit_id = circuit_info(default_circuit_id).id
+        self.history_store = SimulationHistoryStore(
+            history_path,
+            limit=history_limit,
+        )
         self._simulation_lock = threading.Lock()
+        self._builds: dict[str, BuildResult] = {}
         self._cache: dict[str, dict[str, Any]] = {}
 
-    def simulate(self, request: Any) -> dict[str, Any]:
-        if isinstance(request, Mapping):
-            plan = parse_race_plan(request, max_laps=MAX_WEB_LAPS)
-        else:
-            plan = parse_race_plan(
-                {"laps": validate_web_laps(request)},
-                max_laps=MAX_WEB_LAPS,
+        # Preserve the historic ``build`` attribute for API consumers while
+        # making every other circuit an on-demand cost.
+        self.build = self._build_circuit(self.default_circuit_id)
+
+    @property
+    def circuits(self) -> tuple[CircuitInfo, ...]:
+        return f1_circuit_catalogue()
+
+    def _build_circuit(self, circuit_id: str) -> BuildResult:
+        circuit = circuit_info(circuit_id)
+        cached = self._builds.get(circuit.id)
+        if cached is not None:
+            return cached
+        build = build_trajectory(make_f1_circuit(circuit.id), self.config)
+        if not build.success:
+            raise RuntimeError(
+                f"trajectory generation did not converge for {circuit.name}; "
+                "inspect the optimizer configuration"
             )
+        self._builds[circuit.id] = build
+        return build
+
+    def config_payload(self, default_laps: int) -> dict[str, Any]:
+        default = circuit_info(self.default_circuit_id)
+        return {
+            "default_laps": default_laps,
+            "maximum_laps": MAX_WEB_LAPS,
+            "default_circuit_id": default.id,
+            "track_name": default.name,
+            "circuit_season": F1_CIRCUIT_SEASON,
+            "circuits": [item.to_dict() for item in self.circuits],
+            "strategy": strategy_catalog(),
+        }
+
+    def history(self) -> list[dict[str, Any]]:
+        return self.history_store.list()
+
+    def history_detail(self, run_id: str) -> dict[str, Any] | None:
+        return self.history_store.get(run_id)
+
+    def clear_history(self) -> int:
+        return self.history_store.clear()
+
+    def _request_plan(self, request: Any) -> tuple[CircuitInfo, RacePlan]:
+        if not isinstance(request, Mapping):
+            return (
+                circuit_info(self.default_circuit_id),
+                parse_race_plan(
+                    {"laps": validate_web_laps(request)},
+                    max_laps=MAX_WEB_LAPS,
+                ),
+            )
+
+        values = dict(request)
+        raw_circuit_id = values.pop(
+            "circuit_id",
+            values.pop("circuit", self.default_circuit_id),
+        )
+        circuit = circuit_info(raw_circuit_id)
+        plan = parse_race_plan(values, max_laps=MAX_WEB_LAPS)
+        return circuit, plan
+
+    def _record_payload(
+        self,
+        payload: Mapping[str, Any],
+        circuit: CircuitInfo,
+        plan: RacePlan,
+    ) -> dict[str, Any]:
+        result = copy.deepcopy(dict(payload))
+        track = result.get("track")
+        if isinstance(track, dict):
+            track.update(circuit.to_dict())
+        record = self.history_store.append(
+            circuit=circuit,
+            race_plan=plan,
+            payload=result,
+        )
+        result["history"] = record
+        return result
+
+    def simulate(self, request: Any) -> dict[str, Any]:
+        circuit, plan = self._request_plan(request)
         cache_key = json.dumps(
-            plan.to_request_dict(), sort_keys=True, separators=(",", ":")
+            {
+                "circuit_id": circuit.id,
+                **plan.to_request_dict(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
         )
         cached = self._cache.get(cache_key)
         if cached is not None:
-            return cached
+            return self._record_payload(cached, circuit, plan)
         if not self._simulation_lock.acquire(blocking=False):
             raise SimulationBusyError("another simulation is already running")
         try:
             cached = self._cache.get(cache_key)
             if cached is not None:
-                return cached
+                return self._record_payload(cached, circuit, plan)
+            build = self._build_circuit(circuit.id)
             pit_losses = {
                 stint.start_lap - 1: plan.pit_stop_loss_s for stint in plan.stints[1:]
             }
-            simulation = LapSimulator(self.build.trajectory, self.config).run(
+            simulation = LapSimulator(build.trajectory, self.config).run(
                 lap_count=plan.laps,
                 condition_profile=lambda lap, progress: plan.condition_at(
                     lap,
@@ -240,17 +352,28 @@ class SilverstoneWebService:
                 pit_stop_losses_s=pit_losses,
             )
             payload = simulation_payload(
-                self.build,
+                build,
                 simulation,
                 plan.laps,
                 maximum_telemetry_points=self.maximum_telemetry_points,
                 race_plan=plan,
             )
-            self._cache.clear()
+            track = payload.get("track")
+            if isinstance(track, dict):
+                track.update(circuit.to_dict())
             self._cache[cache_key] = payload
-            return payload
+            # Bound memory without evicting the build cache. Each full browser
+            # payload contains telemetry, so retaining the most recent eight is
+            # sufficient for quick scenario comparisons.
+            while len(self._cache) > 8:
+                self._cache.pop(next(iter(self._cache)))
+            return self._record_payload(payload, circuit, plan)
         finally:
             self._simulation_lock.release()
+
+
+# Backward-compatible public name retained for callers of version 0.1.
+SilverstoneWebService = F1WebService
 
 
 def _static_file(name: str) -> bytes:
@@ -261,7 +384,7 @@ def _static_file(name: str) -> bytes:
 
 
 def _handler_factory(
-    service: SilverstoneWebService,
+    service: Any,
     default_laps: int,
 ) -> type[BaseHTTPRequestHandler]:
     class DashboardHandler(BaseHTTPRequestHandler):
@@ -307,15 +430,54 @@ def _handler_factory(
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
             path = urlsplit(self.path).path
             if path == "/api/config":
-                self._json_response(
-                    HTTPStatus.OK,
-                    {
+                config_provider = getattr(service, "config_payload", None)
+                if callable(config_provider):
+                    config = config_provider(default_laps)
+                else:
+                    track_name = service.build.track.name
+                    config = {
                         "default_laps": default_laps,
                         "maximum_laps": MAX_WEB_LAPS,
-                        "track_name": service.build.track.name,
+                        "default_circuit_id": DEFAULT_CIRCUIT_ID,
+                        "track_name": track_name,
+                        "circuit_season": F1_CIRCUIT_SEASON,
+                        "circuits": [
+                            {
+                                "id": DEFAULT_CIRCUIT_ID,
+                                "name": track_name,
+                                "location": "Silverstone",
+                                "country_code": "GB",
+                                "length_m": 5891.0,
+                            }
+                        ],
                         "strategy": strategy_catalog(),
-                    },
+                    }
+                self._json_response(
+                    HTTPStatus.OK,
+                    config,
                 )
+                return
+            if path == "/api/history":
+                history_provider = getattr(service, "history", None)
+                history = history_provider() if callable(history_provider) else []
+                self._json_response(HTTPStatus.OK, {"history": history})
+                return
+            if path.startswith("/api/history/"):
+                run_id = path.removeprefix("/api/history/")
+                detail_provider = getattr(service, "history_detail", None)
+                try:
+                    detail = (
+                        detail_provider(run_id) if callable(detail_provider) else None
+                    )
+                except ValueError:
+                    detail = None
+                if detail is None:
+                    self._json_response(
+                        HTTPStatus.NOT_FOUND,
+                        {"error": "history run not found"},
+                    )
+                    return
+                self._json_response(HTTPStatus.OK, detail)
                 return
             if path == "/favicon.ico":
                 self._bytes_response(HTTPStatus.NO_CONTENT, b"", "image/x-icon")
@@ -359,13 +521,31 @@ def _handler_factory(
             except SimulationBusyError as exc:
                 self._json_response(HTTPStatus.CONFLICT, {"error": str(exc)})
                 return
-            except RuntimeError:
+            except (OSError, RuntimeError):
                 self._json_response(
                     HTTPStatus.INTERNAL_SERVER_ERROR,
                     {"error": "simulation failed"},
                 )
                 return
             self._json_response(HTTPStatus.OK, payload)
+
+        def do_DELETE(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+            if urlsplit(self.path).path != "/api/history":
+                self._json_response(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+            clear = getattr(service, "clear_history", None)
+            try:
+                removed = int(clear()) if callable(clear) else 0
+            except OSError:
+                self._json_response(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    {"error": "history could not be cleared"},
+                )
+                return
+            self._json_response(
+                HTTPStatus.OK,
+                {"cleared": removed, "history": []},
+            )
 
         def log_message(self, format: str, *args: Any) -> None:
             print(f"dashboard: {format % args}")
@@ -374,7 +554,7 @@ def _handler_factory(
 
 
 def create_dashboard_server(
-    service: SilverstoneWebService,
+    service: Any,
     *,
     port: int = DEFAULT_WEB_PORT,
     default_laps: int = DEFAULT_WEB_LAPS,
@@ -398,15 +578,15 @@ def serve_dashboard(
     default_laps: int = DEFAULT_WEB_LAPS,
     open_browser: bool = True,
 ) -> None:
-    """Build Silverstone once and serve the interactive local dashboard."""
+    """Build the default circuit and serve the interactive local dashboard."""
 
     laps = validate_web_laps(default_laps)
-    print("Preparing the Silverstone racing line...")
-    service = SilverstoneWebService()
+    print("Preparing the Formula 1 circuit catalogue...")
+    service = F1WebService()
     server = create_dashboard_server(service, port=port, default_laps=laps)
     actual_port = int(server.server_address[1])
     url = f"http://127.0.0.1:{actual_port}/?laps={laps}&autorun=1"
-    print(f"Silverstone dashboard: {url}")
+    print(f"Formula 1 racing dashboard: {url}")
     print("Press Ctrl+C to stop the local server.")
     if open_browser:
         threading.Timer(0.4, webbrowser.open, args=(url,)).start()
@@ -421,6 +601,7 @@ def serve_dashboard(
 __all__ = [
     "DEFAULT_WEB_LAPS",
     "DEFAULT_WEB_PORT",
+    "F1WebService",
     "MAX_WEB_LAPS",
     "SilverstoneWebService",
     "create_dashboard_server",

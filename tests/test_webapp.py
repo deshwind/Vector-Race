@@ -64,6 +64,7 @@ def test_simulation_payload_projects_browser_schema_and_lap_results() -> None:
             width_right_m=np.array([8.0, 8.5, 8.0]),
         ),
         trajectory=SimpleNamespace(
+            s_m=np.array([0.0, 10.0, 20.0]),
             x_m=np.array([1.0, 10.0, 19.0]),
             y_m=np.array([0.0, 4.0, 0.0]),
             speed_mps=np.array([50.0, 60.0, 55.0]),
@@ -81,6 +82,7 @@ def test_simulation_payload_projects_browser_schema_and_lap_results() -> None:
                 "x_m": float(index),
                 "y_m": float(index * 2),
                 "speed_mps": 40.0 + index,
+                "target_speed_mps": 42.0 + index,
                 "vehicle_edge_clearance_m": 0.5 - index * 0.01,
                 "grip_mu": 1.65 if second_lap else 1.70,
                 "tyre": "hard" if second_lap else "soft",
@@ -145,7 +147,12 @@ def test_simulation_payload_projects_browser_schema_and_lap_results() -> None:
 
     assert payload["track"]["name"] == "Silverstone Circuit"
     assert payload["track"]["x_m"] == [0.0, 10.0, 20.0]
+    assert payload["trajectory"]["s_m"] == [0.0, 10.0, 20.0]
     assert payload["trajectory"]["speed_kph"] == [180.0, 216.0, 198.0]
+    assert payload["telemetry"]["progress_laps"] == progresses
+    assert payload["telemetry"]["target_speed_kph"] == pytest.approx(
+        [151.2, 154.8, 158.4, 162.0, 165.6, 169.2]
+    )
     assert payload["telemetry"]["lap_number"] == [1, 1, 1, 2, 2, 2]
     assert payload["telemetry"]["clearance_m"] == pytest.approx(
         [0.5, 0.49, 0.48, 0.47, 0.46, 0.45]
@@ -166,6 +173,7 @@ def test_simulation_payload_projects_browser_schema_and_lap_results() -> None:
         "damp",
         "damp",
     ]
+    assert payload["telemetry"]["track_wetness"] == [0.0] * 6
     assert payload["telemetry"]["pit_stop"] == [
         False,
         False,
@@ -206,6 +214,12 @@ def test_simulation_payload_projects_browser_schema_and_lap_results() -> None:
         "dry",
         "damp",
     ]
+    assert [item["compound"] for item in payload["tyre_analysis"]["stints"]] == [
+        "soft",
+        "hard",
+    ]
+    assert len(payload["tyre_analysis"]["laps"]) == 2
+    json.dumps(payload, allow_nan=False)
 
 
 @pytest.mark.parametrize(
@@ -218,6 +232,38 @@ def test_simulation_payload_projects_browser_schema_and_lap_results() -> None:
 )
 def test_packaged_dashboard_assets_are_readable(name: str, marker: bytes) -> None:
     assert marker.lower() in _static_file(name).lower()
+
+
+def test_dashboard_assets_include_extended_result_analysis() -> None:
+    html = _static_file("index.html").decode("utf-8")
+    script = _static_file("app.js").decode("utf-8")
+
+    for element_id in (
+        "comparisonPanel",
+        "comparisonFastestDelta",
+        "consistencyRating",
+        "speedTraceChart",
+        "tyreReviewPanel",
+        "tyreWearChart",
+        "savedRunContext",
+    ):
+        assert f'id="{element_id}"' in html
+    assert "Vector Race" in html
+    assert '<th scope="col">Tyre</th>' in html
+    assert '<th scope="col">Weather</th>' in html
+    for marker in (
+        "populateComparison",
+        "populateConsistency",
+        "drawSpeedTrace",
+        "progress_laps",
+        "target_speed_kph",
+        "lap-condition-badge",
+        "populateTyreReview",
+        "loadHistoryResult",
+        "localeCompare",
+        "Vector Race",
+    ):
+        assert marker in script
 
 
 class _FakeWebService:
@@ -240,6 +286,16 @@ class _FakeWebService:
                 "completed_laps": plan.laps,
             },
             "strategy": plan.to_dict(),
+        }
+
+    def history_detail(self, run_id: str) -> dict[str, object] | None:
+        if run_id != "a" * 32:
+            return None
+        return {
+            "track": {"name": "Silverstone Circuit"},
+            "summary": {"requested_laps": 3, "completed_laps": 3},
+            "telemetry": [{"time_s": 0.0, "speed_mps": 45.0}],
+            "details_available": True,
         }
 
 
@@ -281,7 +337,32 @@ def test_dashboard_server_serves_config_static_ui_and_simulation_api() -> None:
         }
         assert len(strategy["tyres"]) == 5
         assert len(strategy["weather_conditions"]) == 5
+        assert config["default_circuit_id"] == "gb-1948"
+        assert config["circuits"] == [
+            {
+                "id": "gb-1948",
+                "name": "Silverstone Circuit",
+                "location": "Silverstone",
+                "country_code": "GB",
+                "length_m": 5891.0,
+            }
+        ]
         assert "default-src 'self'" in headers["Content-Security-Policy"]
+
+        status, history, _headers = _read_json(f"{base_url}/api/history")
+        assert status == 200
+        assert history == {"history": []}
+
+        status, saved_result, _headers = _read_json(
+            f"{base_url}/api/history/{'a' * 32}"
+        )
+        assert status == 200
+        assert saved_result["details_available"] is True
+        assert saved_result["telemetry"] == [{"time_s": 0.0, "speed_mps": 45.0}]
+
+        status, error, _headers = _read_json(f"{base_url}/api/history/not-an-id")
+        assert status == 404
+        assert error == {"error": "history run not found"}
 
         with urlopen(f"{base_url}/", timeout=2.0) as response:  # noqa: S310
             assert response.status == 200
@@ -382,6 +463,14 @@ def test_dashboard_server_serves_config_static_ui_and_simulation_api() -> None:
         assert status == 409
         assert error == {"error": "another simulation is already running"}
         service.busy = False
+
+        clear_history = Request(
+            f"{base_url}/api/history",
+            method="DELETE",
+        )
+        status, cleared, _headers = _read_json(clear_history)
+        assert status == 200
+        assert cleared == {"cleared": 0, "history": []}
 
         status, error, _headers = _read_json(f"{base_url}/missing")
         assert status == 404

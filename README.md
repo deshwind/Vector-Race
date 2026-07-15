@@ -1,7 +1,9 @@
-# Silverstone racing-line optimization prototype
+# Vector Race
 
 This repository is a runnable, simulation-first racing-line MVP. The default
-demo now uses the modern Silverstone Grand Prix/Arena circuit and combines:
+command-line demo uses the modern Silverstone Grand Prix/Arena circuit, while
+the browser dashboard includes the 24 announced 2026 circuit layouts. The
+project combines:
 
 1. periodic track resampling and geometry;
 2. a bounded minimum-curvature baseline trajectory;
@@ -49,20 +51,28 @@ The demo writes these reproducible artifacts under `outputs/silverstone/`:
 
 ## Web dashboard
 
-Run the Silverstone strategy simulator in a browser with:
+Run the Vector Race strategy simulator in a browser with:
 
 ```powershell
 racing-line web
 ```
 
-The page opens at `http://127.0.0.1:8765` with a ten-lap Silverstone plan. You
-can choose 1–25 laps, edit the strategy, and rerun it without restarting the
-server. To choose the initial lap count or avoid opening a browser
-automatically:
+The page opens at `http://127.0.0.1:8765` with a ten-lap Silverstone plan. Use
+the circuit selector to choose any of the 24 bundled 2026 layouts, then choose
+1–25 laps, edit the strategy, and rerun it without restarting the server. To
+choose the initial lap count or avoid opening a browser automatically:
 
 ```powershell
 racing-line web --laps 10 --no-browser
 ```
+
+The sidebar separates the workflow into **Run simulation**, **Results**, and
+**History**. Successful runs open the results workspace automatically. Compact
+performance summaries are saved under `outputs/simulation_history.json`, while
+compressed per-run snapshots retain the detailed result data needed to reopen
+newer simulations after a browser or server restart. History can be cleared
+directly from that view; records made by older versions remain available as
+summary-only results.
 
 Build the race plan before pressing **Run strategy**:
 
@@ -77,13 +87,22 @@ Build the race plan before pressing **Run strategy**:
 - Read the strategy timeline and executed-plan cards to confirm exactly which
   tyre and weather phase applied on each lap.
 
-The circuit explorer uses most of the available browser width and supports
+The results circuit explorer uses most of the available browser width and supports
 mouse-wheel or pinch zoom, drag-to-pan, dedicated zoom/reset buttons, keyboard
 zoom and arrow-key panning, and full-screen mode. Toggle the track limits,
 optimized line, driven path, and speed heatmap independently. Hover over the
 driven path for lap, time, speed, clearance, tyre, and weather telemetry; click
 to pin the readout while inspecting nearby points. The replay, run summary,
-lap-time chart, and timing sheet remain available below the map.
+lap-time chart, and timing sheet remain available below the map. Result
+analysis also compares the latest run with the best compatible saved run on
+the same circuit, reports lap-time consistency and pace trend, plots simulated
+speed against the condition-adjusted controller target around the lap, and
+annotates each timing row with its active tyre and weather phase.
+The tyre-performance review adds an estimated wear index, relative performance,
+surface/core temperature estimates, stint reviews, ranked degradation causes,
+and suggested strategy changes. These values are generated from simulated
+distance, speed/load, compound, track temperature, and wetness; they are not
+measured tyre sensor values or tread depth.
 
 This is a local web app: the server runs on your computer and is intentionally
 available only to your computer. Publishing it at a public URL requires a
@@ -92,13 +111,11 @@ separate hosting step.
 ### Strategy-model scope
 
 The dashboard is a calibrated comparative model, not an official Formula 1
-strategy tool. Its Silverstone slick labels follow the public 2026 allocation:
-C1 as Hard, C2 as Medium, and C3 as Soft, as listed in the
-[Formula 1 tyre preview](https://www.formula1.com/en/latest/article/what-tyres-will-the-teams-and-drivers-have-for-the-2026-british-grand-prix.3qD9d5o8X4x3se0F7Zg5i1).
-Intermediate and Full Wet usage follows the broad roles described in
-[Pirelli's Formula 1 tyre guide](https://www.pirelli.com/tyres/en-ww/motorsport/car/formula-1).
-All numerical grip, warm-up, wear, temperature, rain-crossover, and pace
-effects are documented engineering estimates rather than team data.
+strategy tool. Soft, Medium, and Hard are generic model bands rather than the
+specific compounds allocated to a real race weekend. Intermediate and Full
+Wet have simplified wet-weather roles. All numerical grip, warm-up, wear,
+temperature, rain-crossover, and pace effects are documented engineering
+estimates rather than team data.
 
 Each scheduled tyre change adds a fixed `25.0 s` pit loss to total race time.
 This makes one-stop and multi-stop plans directly comparable, but it does not
@@ -132,6 +149,23 @@ official `5.891 km` lap length shown on the
 It is a circa-2020 research reconstruction derived from OpenStreetMap and
 satellite imagery, not official survey data. Full provenance and license
 details are in [`src/racing_line/data/README.md`](src/racing_line/data/README.md)
+and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+## Bundled Formula 1 circuit catalogue
+
+The web selector uses the 24-layout 2026 index from the MIT-licensed
+[`bacinger/f1-circuits`](https://github.com/bacinger/f1-circuits) project at a
+pinned revision. The source contains unofficial longitude/latitude
+centrelines and nominal lengths, not surveyed circuit boundaries. The loader
+projects each layout into local metre coordinates and uses a provisional
+constant `7 m` width on each side for comparative simulation.
+
+The shared web profile uses dense resampling and a conservative speed envelope
+so the deterministic one-lap smoke run completes on all 24 bundled layouts.
+This validation establishes software behavior only; it does not make the
+geometry, widths, lap times, or vehicle response official F1 data. Full source,
+transformation, and license details are in
+[`src/racing_line/data/f1_circuits/README.md`](src/racing_line/data/f1_circuits/README.md)
 and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## Use your own track
@@ -233,7 +267,8 @@ on Python 3.13.
 General vehicle, optimizer, safety, simulation, and PPO defaults live in
 [`configs/default.yaml`](configs/default.yaml); Silverstone-specific numerical
 overrides live in [`configs/silverstone.yaml`](configs/silverstone.yaml). The
-full-scale values are plausible research assumptions only. Real current
+web catalogue applies its conservative shared profile in code. The full-scale
+values are plausible research assumptions only. Real current
 Formula 1 tyre, aerodynamic, and power-unit maps are proprietary and are not
 implied by this prototype. The web strategy layer adds editable simplified
 tyre and weather multipliers plus the fixed pit-loss assumption described

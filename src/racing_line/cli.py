@@ -213,7 +213,7 @@ def command_export_demo_track(args: argparse.Namespace) -> int:
 
 
 def command_web(args: argparse.Namespace) -> int:
-    """Serve the interactive Silverstone dashboard on this computer."""
+    """Serve the interactive multi-circuit dashboard on this computer."""
 
     from .webapp import serve_dashboard
 
@@ -306,7 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     web = subparsers.add_parser(
         "web",
-        help="open the interactive Silverstone simulation dashboard",
+        help="open the interactive Formula 1 simulation dashboard",
     )
     web.add_argument(
         "--laps",

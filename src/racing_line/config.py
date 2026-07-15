@@ -231,6 +231,41 @@ def make_silverstone_config() -> AppConfig:
     )
 
 
+def make_f1_catalog_config() -> AppConfig:
+    """Return conservative shared settings for the bundled F1 catalogue.
+
+    The catalogue combines simplified geographic centrelines from permanent
+    and street circuits. A denser resampling grid helps the pure-pursuit
+    controller follow sharp layout changes, while a conservative lateral
+    acceleration factor keeps the same deterministic controller
+    within the provisional track boundaries across all bundled layouts.
+    """
+
+    config = AppConfig()
+    return replace(
+        config,
+        optimizer=replace(
+            config.optimizer,
+            points=600,
+            safety_margin_m=1.0,
+            offset_regularization=1.0e-4,
+        ),
+        speed_profile=replace(
+            config.speed_profile,
+            lateral_safety_factor=0.75,
+        ),
+        simulation=replace(
+            config.simulation,
+            max_time_s=400.0,
+            lookahead_base_m=3.0,
+            lookahead_speed_gain_s=0.08,
+            speed_kp=6.3,
+            steering_kp=1.58,
+            start_speed_mps=5.0,
+        ),
+    )
+
+
 T = TypeVar("T")
 
 

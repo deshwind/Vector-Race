@@ -1,5 +1,5 @@
 include THIRD_PARTY_NOTICES.md
 recursive-include THIRD_PARTY_LICENSES *.txt
 recursive-include configs *.yaml
-recursive-include src/racing_line/data *.csv *.md
+recursive-include src/racing_line/data *.csv *.geojson *.json *.md
 recursive-include src/racing_line/web *.html *.css *.js

@@ -47,6 +47,9 @@ where = ["src"]
 racing_line = [
   "data/*.csv",
   "data/*.md",
+  "data/f1_circuits/*.geojson",
+  "data/f1_circuits/*.json",
+  "data/f1_circuits/*.md",
   "web/*.html",
   "web/*.css",
   "web/*.js",
